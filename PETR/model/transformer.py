@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import math
+import copy
 
 def pos2posemb3d(pos, num_pos_feats=128, temperature=10000):
     # Inputs:
@@ -22,7 +23,60 @@ def pos2posemb3d(pos, num_pos_feats=128, temperature=10000):
     posemb = torch.cat((pos_x, pos_y, pos_z), dim=-1)
     return posemb
 
-class 
+def _get_clones(module, N):
+    return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
+
+class resBlock(nn.Module):
+    def __init__(self, inputC=256, outputC=1024, dropout=0.0):
+        super(resBlock, self).__init__()
+        self.linear1 = nn.Linear(inputC, outputC)
+        self.relu = nn.ReLU(True)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(outputC, inputC)
+        self.LN = nn.LayerNorm(inputC)
+        
+    def forward(self, x):
+        out = self.linear2(self.dropout1(self.linear1(x)))
+        out = self.LN(x+self.dropout2(out))
+        return out
+
+class TransformerDecoderLayer(nn.Module):
+    def __init__(self, dim_emb=256, dim_resblock=1024, dropout=0.0, numHead=8):
+        super(TransformerDecoderLayer, self).__init__()
+        self.iniAttn = nn.MultiheadAttention(dim_emb, numHead, dropout=dropout)
+        self.dropout1 = nn.Dropout(dropout)
+        self.LN1 = nn.LayerNorm(dim_emb)
+        
+        self.crossAttn = nn.MultiheadAttention(dim_emb, numHead, dropout=dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        self.LN2 = nn.LayerNorm(dim_emb)
+        
+        self.selfAttn = nn.MultiheadAttention(dim_emb, numHead, dropout=dropout)
+        self.dropout3 = nn.Dropout(dropout)
+        self.LN3 = nn.LayerNorm(dim_emb)
+        
+        self.ffn = resBlock(dim_emb, dim_resblock, dropout=dropout)
+        
+    def forward(self, tgt, feat2d, query_pos, point3dPE, point2dFE):
+        tgt0 = self.iniAttn((tgt+query_pos).transpose(0, 1),
+                                (point3dPE+point2dFE).transpose(0,1),
+                                point3dPE.transpose(0, 1))[0].transpose(0,1)
+        tgt = tgt + self.dropout1(tgt0)
+        tgt = self.LN1(tgt)
+        # self attention
+        q = k = tgt + query_pos
+        tgt2 = self.selfAttn(q.transpose(0, 1), k.transpose(0, 1), tgt.transpose(0, 1))[0].transpose(0, 1)
+        tgt = tgt + self.dropout3(tgt2)
+        tgt = self.LN3(tgt)
+
+        tgt2 = self.crossAttn((tgt+query_pos).transpose(0, 1),
+                                (feat2d+point3dPE).transpose(0,1),
+                                feat2d.transpose(0, 1))[0].transpose(0,1)
+        tgt = tgt + self.dropout2(tgt2)
+        tgt = self.LN2(tgt)
+        tgt = self.ffn(tgt)
+        return tgt
 
 class Transformer(nn.Module):
     def __init__(self, dim_model=256, headNum=8, decoderLayerNum=6, 
@@ -44,21 +98,31 @@ class Transformer(nn.Module):
             nn.Linear(self.dim_model, self.dim_model), 
         )
         
+        decoder_layer = TransformerDecoderLayer(dim_resblock=dimBackbone, dropout=dropout)
+        self.decoder_layers = _get_clones(decoder_layer, decoderLayerNum)
+        
     def forward(self, feat2d, point3dPE, point2dFE):
         B, L, C = feat2d.size()
         refs = self.position.weight.unsqueeze(0).repeat(B, 1, 1)
         query = self.position_encoder(pos2posemb3d(refs)) # BxNxC
-        print(query.shape)
 
-        outputs_feats = []
-        outputs_refs = []
+        outputFeats = []
+        outputRefs = []
         output = torch.zeros_like(query)
-        return query
+        
+        for layer in self.decoder_layers:
+            output = layer(output, feat2d, query, point3dPE, point2dFE)
+            output = torch.nan_to_num(output)
+            outputFeats.append(output)
+            outputRefs.append(refs.clone())
+            
+        return outputFeats, outputRefs
         
         
 if __name__ == '__main__':
-    feat2d = torch.randn(2, 294, 256)
-    point3dPE = torch.randn(2, 294, 256)
-    point2dFE = torch.randn(2, 294, 256)
-    model = Transformer()
-    output = model(feat2d, point3dPE, point2dFE)
+    feat2d = torch.randn(2, 98, 256)
+    point3dPE = torch.randn(2, 98, 256)
+    point2dFE = torch.randn(2, 98, 256)
+    model = Transformer(decoderLayerNum=2)
+    feats, refs = model(feat2d, point3dPE, point2dFE)
+    print(len(feats))

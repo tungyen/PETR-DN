@@ -1,7 +1,16 @@
 import torch
 import torch.nn as nn
-from cameraEncoder import CamEncoder
+import torch.nn.functional as F
 import math
+
+from cameraEncoder import CamEncoder
+from transformer import *
+
+def inverse_sigmoid(x, eps=1e-5):
+    x = x.clamp(min=0, max=1)
+    x1 = x.clamp(min=eps)
+    x2 = (1 - x).clamp(min=eps)
+    return torch.log(x1/x2)
 
 def sin_positional_encoding3D(size, device='cpu', num_feats=128, offset=0.0, temperature=10000):
     # Inputs:
@@ -139,27 +148,90 @@ class posEncoder3d(nn.Module):
         point2dFE = point2dFE.permute(0,2,3,1)
         point2dFE = point2dFE.reshape(B, -1, 256)
         return feat2d, point3dPE, point2dFE
+    
+    
+class PETR(nn.Module):
+    def __init__(self, grid, camNum, camC, D, clsNum, dim_model=256, headNum=8, decoderLayerNum=6, 
+                 dimBackbone=2048, dropout=0.1, queryNum=900, wCls=1, wBox=1, auxLoss=False):
+        super(PETR, self).__init__()
+        self.clsNum = clsNum
+        self.decoderLayerNum = decoderLayerNum
+        self.auxLoss = auxLoss
+        self.wCls = wCls
+        self.wBox = wBox
+        
+        self.xBound = grid['xbound']
+        self.yBound = grid['ybound']
+        self.zBound = grid['zbound']
+        
+        self.positionEncoder3D = posEncoder3d(camNum, D, grid, camC)
+        self.transformer = Transformer(decoderLayerNum=decoderLayerNum)
+        
+        self.clsMLP = nn.Sequential(
+            nn.Linear(256, 256),
+            nn.LayerNorm(256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, clsNum)
+        )
+        
+        self.bboxMLP = nn.Sequential(
+            nn.Linear(256, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, 8)
+        )
+        
+        self.init_parameters()
+        empty_weight = torch.ones(self.clsNum + 1)
+        empty_weight[-1] = 0.1 # empty weight
+        self.register_buffer('empty_weight', empty_weight)
+    
+    def init_parameters(self):
+        prior_prob = 0.01
+        bias_value = -math.log((1 - prior_prob) / prior_prob)
+        self.clsMLP[-1].bias.data = torch.ones(self.clsNum) * bias_value
+        nn.init.constant_(self.bboxMLP[-1].bias.data, 0)
+        if self.auxLoss:
+            self.clsMLP = nn.ModuleList([self.clsMLP for _ in range(self.decoderLayerNum)])
+            self.bboxMLP = nn.ModuleList([self.bboxMLP for _ in range(self.decoderLayerNum)])
+            
+    def decode_boxes(self, bboxes, ref):
+        ref = inverse_sigmoid(ref)
+        xyz = (bboxes[..., 0:3] + ref).sigmoid()
+        x = xyz[..., 0] * (self.xBound[1] - self.xBound[0]) + self.xBound[0]
+        y = xyz[..., 1] * (self.yBound[1] - self.yBound[0]) + self.yBound[0]
+        z = xyz[..., 2] * (self.zBound[1] - self.zBound[0]) + self.zBound[0]
+        xyz = torch.stack([x, y, z], dim=-1)
+        bboxes = torch.cat([xyz, bboxes[..., 3:]], dim=2)
+        return  bboxes
+        
+    def forward(self, input):
+        feat2d, point3dPE, point2dFE = self.positionEncoder3D(input)
+        outputFeats, outputRefs = self.transformer(feat2d, point3dPE, point2dFE)
+        cls_score = self.clsMLP(outputFeats[-1])
+        bboxes = self.bboxMLP(outputFeats[-1])
+        bboxes = self.decode_boxes(bboxes, outputRefs[-1])
+        return cls_score, bboxes
         
         
 if __name__ == '__main__':
-    num_views = 6
+    num_views = 2
     input_channels = 3
     grid = {}
     grid['xbound'] = [-65, 65]
     grid['ybound'] = [-65, 65]
     grid['zbound'] = [-8, 8]
+    xBound = grid['xbound']
+    yBound = grid['ybound']
+    zBound = grid['zbound']
     input_images = torch.randn(2, num_views, input_channels, 224, 224)
-    
-    model = posEncoder3d(6, 64, grid, 2048)
+    model = PETR(grid=grid, camNum=num_views, camC=2048, D=64, clsNum=10, decoderLayerNum=1)
     
     input = {}
     input['image'] = input_images
     input['rots'] = torch.randn(2, num_views, 3, 3)
     input['intrins'] = torch.randn(2, num_views, 3, 3)
     input['trans'] = torch.randn(2, num_views, 3)
-    
-    F2d, PE, feat_PE = model(input)
-    print(F2d.shape)
-    print(PE.shape)
-    print(feat_PE.shape)
+    cls_score, bboxes = model(input)
+    print(cls_score.shape)
+    print(bboxes.shape)
     
