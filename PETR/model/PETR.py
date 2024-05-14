@@ -151,8 +151,8 @@ class posEncoder3d(nn.Module):
     
     
 class PETR(nn.Module):
-    def __init__(self, grid, camNum, camC, D, clsNum, dim_model=256, headNum=8, decoderLayerNum=6, 
-                 dimBackbone=2048, dropout=0.1, queryNum=900, wCls=1, wBox=1, auxLoss=False):
+    def __init__(self, grid, camNum, camC, D, clsNum, decoderLayerNum=6, 
+                 wCls=1, wBox=1, auxLoss=False):
         super(PETR, self).__init__()
         self.clsNum = clsNum
         self.decoderLayerNum = decoderLayerNum
@@ -232,6 +232,6 @@ if __name__ == '__main__':
     input['intrins'] = torch.randn(2, num_views, 3, 3)
     input['trans'] = torch.randn(2, num_views, 3)
     cls_score, bboxes = model(input)
-    print(cls_score.shape)
-    print(bboxes.shape)
+    print(cls_score.shape) # (B, 900, 3)
+    print(bboxes.shape) # (B, 900, 8)
     
