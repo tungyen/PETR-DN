@@ -1,7 +1,7 @@
 import os
 import numpy as np
+import torch
 
-
-a = 0
-b = [1,2,3]
-print([a]+b)
+a = torch.zeros(20, 7)
+b = torch.ones(3, 7)
+a[:b.shape[0], :] = b

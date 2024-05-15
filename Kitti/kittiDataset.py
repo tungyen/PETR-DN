@@ -5,10 +5,24 @@ from PIL import Image
 import os
 import numpy as np
 
+mp = {
+    'Car': 0,
+    'Van': 1,
+    'Pedestrian': 2,
+    'Cyclist': 3,
+    'Truck': 4,
+    'Misc': 5,
+    'Tram': 6,
+    'Person_sitting': 7
+}
+
 class KittiDataset(Dataset):
-    def __init__(self, transform=None, mode="train"):
+    def __init__(self, width, height, objectNum=20, transform=None, mode="train"):
         self.transform = transform
         self.mode = mode
+        self.width = width
+        self.height = height
+        self.objectNum = objectNum
             
         if self.mode == 'train':
             self.files = "train.txt"
@@ -19,7 +33,7 @@ class KittiDataset(Dataset):
         else:
             self.files = 'test.txt'
             self.folderName = "testing"
-        
+
         self.names = []
         with open(self.files, "r") as file:
             for line in file:
@@ -55,13 +69,13 @@ class KittiDataset(Dataset):
         file.close()
         rot = np.eye(3)
         if cam == "image_left":
-            trans = np.array([-0.06, 0, 0])
+            t = np.array([-0.06, 0, 0])
         else:
-            trans = np.array([0.48, 0, 0])
+            t = np.array([0.48, 0, 0])
             
         # Bounding boxes
         if self.mode == "test":
-            return imgPath, intrin, rectRot, rot, trans
+            return imgPath, intrin, rectRot, rot, t
         else:
             bboxPath = os.path.join("label", "training", "label_2", filename+".txt")
             bboxes = []
@@ -69,9 +83,12 @@ class KittiDataset(Dataset):
             with open(bboxPath, 'r') as file:
                 for line in file:
                     values = line.split()
-                    categories.append(values[0])
-                    bboxes.append([values[3]]+values[8:-1])
-            return imgPath, intrin, rectRot, rot, trans, bboxes, categories
+                    if values[0] == "DontCare":
+                        continue
+                    categories.append(mp[values[0]])
+                    boxInfo = [float(info) for info in values[8:]]
+                    bboxes.append(boxInfo)
+            return imgPath, intrin, rectRot, rot, t, bboxes, categories
     
 
     def __getitem__(self, index):
@@ -80,20 +97,40 @@ class KittiDataset(Dataset):
         trans = []
         intrins = []
         for cam in self.cams:
-            if self.mode != "test":
-                imgPath, intrin, rectRot, rot, trans, bboxes, categories = self.getData(index, cam)
-                
-                
-                
+            if self.mode == "train" or self.mode == 'eval':
+                imgPath, intrin, rectRot, rot, t, bboxes, categories = self.getData(index, cam)
             else:
-                imgPath, intrin, rectRot, rot, trans = self.getData(index, cam)
-                
-        return imgPath        
+                imgPath, intrin, rectRot, rot, t = self.getData(index, cam)
+            img = Image.open(imgPath) # (w, h)
+            imgW, imgH = img.size
+            img = img.resize((self.width, self.height), resample=Image.NEAREST)
+            intrin[0, :] *= ( self.width / imgW)
+            intrin[1, :] *= ( self.height / imgH)
+            imgs.append(self.transform(img))
+            rots.append(torch.Tensor(rot))
+            trans.append(torch.Tensor(t))
+            intrins.append(torch.Tensor(intrin))
+        rectRot = torch.tensor(rectRot)
+
+        if self.mode == "train" or self.mode == 'eval':
+            box3d = torch.zeros(self.objectNum, 7)
+            labels = torch.ones(self.objectNum) * -1
+            labels[:len(categories)] = torch.tensor(categories)
+            box3d[:len(bboxes), :] = torch.tensor(bboxes)
+            return imgs, rots, trans, intrins, box3d, labels
+        else:
+            return imgs, rots, trans, intrins
                 
 if __name__ == '__main__':
-    dataset = KittiDataset()
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    
+    dataset = KittiDataset(1280, 640, transform=transform)
     for data in dataset:
         print(data)
+        break
         
         
         
