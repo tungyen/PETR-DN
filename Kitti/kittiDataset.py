@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
 import os
@@ -112,14 +112,19 @@ class KittiDataset(Dataset):
             intrins.append(torch.Tensor(intrin))
         rectRot = torch.tensor(rectRot)
 
+        imgs = torch.stack(imgs)
+        rots = torch.stack(rots)
+        intrins = torch.stack(intrins)
+        trans = torch.stack(trans)
+        
         if self.mode == "train" or self.mode == 'eval':
             box3d = torch.zeros(self.objectNum, 7)
             labels = torch.ones(self.objectNum) * -1
             labels[:len(categories)] = torch.tensor(categories)
             box3d[:len(bboxes), :] = torch.tensor(bboxes)
-            return imgs, rots, trans, intrins, box3d, labels
+            return imgs, rots, trans, intrins, rectRot, box3d, labels
         else:
-            return imgs, rots, trans, intrins
+            return imgs, rots, trans, intrins, rectRot
                 
 if __name__ == '__main__':
     transform = transforms.Compose([
@@ -128,9 +133,25 @@ if __name__ == '__main__':
     ])
     
     dataset = KittiDataset(1280, 640, transform=transform)
-    for data in dataset:
-        print(data)
+    # for data in dataset:
+    #     imgs, rots, trans, intrins, rectRot, box3d, labels = data
+    #     print(imgs.shape)
+    #     print(rots.shape)
+    #     print(trans.shape)
+    #     print(intrins.shape)
+    #     print(rectRot.shape)
+    #     break
+    
+    B = 2
+    nw = 0
+    trainDataloader = DataLoader(dataset, batch_size=B, shuffle=True, pin_memory=True, num_workers=nw)
+    
+    for imgs, rots, trans, intrins, rectRot, box3d, labels in trainDataloader:
+        print(imgs.shape)
+        print(rots.shape)
+        print(trans.shape)
+        print(intrins.shape)
+        print(rectRot.shape)
         break
-        
         
         

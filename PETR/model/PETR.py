@@ -68,7 +68,8 @@ class posEncoder3d(nn.Module):
             nn.Conv2d(1024, 256, kernel_size=1, stride=1, padding=0),
         )
     
-    def pointGenerator(self, Hf, Wf, D, I, rots, translations):
+    # def pointGenerator(self, Hf, Wf, D, I, rots, translations):
+    def pointGenerator(self, Hf, Wf, D, K, rectRot=None):
         # Inputs:
         #     Hf - The height of 2D feature after backbone model
         #     Wf - The width of 2D feature after backbone model
@@ -78,13 +79,27 @@ class posEncoder3d(nn.Module):
         #     translations - The translation vector of each camera with shape (B, N, 3)
         # Outputs:
         #     points - The resulted 3D coordinates points with shape (B, N, D, Hf, Wf, 3)
+        
+        # frustum = self.getFrustum(Hf, Wf, D)
+        # frustum = frustum.to(I.device)
+        # B, N, _ = translations.shape
+        # points = frustum.view(1, 1, D, Hf, Wf, 3).repeat(B, N, 1, 1, 1, 1)
+        # combine = rots.matmul(torch.inverse(I))
+        # points = combine.view(B, N, 1, 1, 1, 3, 3).matmul(points.unsqueeze(-1)).squeeze(-1)
+        # points += translations.view(B, N, 1, 1, 1, 3)
+        # points = self.posNorm(points)
+        # return points
         frustum = self.getFrustum(Hf, Wf, D)
-        frustum = frustum.to(I.device)
-        B, N, _ = translations.shape
+        frustum = frustum.to(K.device)
+        B, N, _, _ = K.shape
         points = frustum.view(1, 1, D, Hf, Wf, 3).repeat(B, N, 1, 1, 1, 1)
-        combine = rots.matmul(torch.inverse(I))
-        points = combine.view(B, N, 1, 1, 1, 3, 3).matmul(points.unsqueeze(-1)).squeeze(-1)
-        points += translations.view(B, N, 1, 1, 1, 3)
+        
+        if rectRot != None:
+            inv_rectRot = torch.inverse(rectRot).view(B, N, 1, 1, 1, 3, 3)
+            points = inv_rectRot.matmul(points.unsqueeze(-1)).squeeze(-1)
+            
+        
+        
         points = self.posNorm(points)
         return points
     
