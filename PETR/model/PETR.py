@@ -3,8 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-from cameraEncoder import CamEncoder
-from transformer import *
+from .cameraEncoder import CamEncoder
+from .transformer import *
 
 def inverse_sigmoid(x, eps=1e-5):
     x = x.clamp(min=0, max=1)
@@ -41,7 +41,7 @@ def sin_positional_encoding3D(size, device='cpu', num_feats=128, offset=0.0, tem
     return pos
 
 class posEncoder3d(nn.Module):
-    def __init__(self, camNum, D, grid, camC):
+    def __init__(self, camNum, D, grid, camC, LID=True, depthStart=1):
         super(posEncoder3d, self).__init__()
         self.camNum = camNum
         self.D = D
@@ -49,6 +49,8 @@ class posEncoder3d(nn.Module):
         self.xBound = grid['xbound']
         self.yBound = grid['ybound']
         self.zBound = grid['zbound']
+        self.LID = LID
+        self.depthStart = depthStart
         
         self.CamEncoder = CamEncoder()
         self.feat_conv = nn.Conv2d(self.camC, 256, 1, 1)
@@ -95,12 +97,22 @@ class posEncoder3d(nn.Module):
         points = frustum.view(1, 1, D, Hf, Wf, 3).repeat(B, N, 1, 1, 1, 1)
         
         if rectRot != None:
-            inv_rectRot = torch.inverse(rectRot).view(B, N, 1, 1, 1, 3, 3)
+            inv_rectRot = torch.inverse(rectRot).view(B, 1, 1, 1, 3, 3)[:, None, ...]
             points = inv_rectRot.matmul(points.unsqueeze(-1)).squeeze(-1)
-            
         
+        homo_tensor_points = torch.ones((B, N, D, Hf, Wf, 1))
+        points = torch.cat((points, homo_tensor_points), dim=-1) # (B, N, D, Hf, Wf, 4)
+
+        homo_tensor_K = torch.zeros((B, N, 1, 4))
+        homo_tensor_K[:, :, 0, 3] = 1
+        K = torch.cat((K, homo_tensor_K), dim=2) # (B, N, 4, 4)
+        inv_K = torch.inverse(K).view(B, N, 1, 1, 1, 4, 4)
+        points = inv_K.matmul(points.unsqueeze(-1)).squeeze(-1)
         
+        points = points / points[...,-1].unsqueeze(-1)
+        points = points[...,:-1]
         points = self.posNorm(points)
+        print(points.shape)
         return points
     
     def posNorm(self, points):
@@ -124,7 +136,13 @@ class posEncoder3d(nn.Module):
         #     frustum - The frustum space with shape (D, Hf, Wf, 3)
         ys, xs = torch.meshgrid([torch.arange(Hf), torch.arange(Wf)])
         ones = torch.ones((Hf, Wf))
-        ds = torch.arange(D, dtype=torch.float).view(-1, 1, 1, 1) + 0.5
+        
+        if self.LID:
+            index  = torch.arange(start=0, end=self.D, step=1).float().view(-1, 1, 1, 1)
+            bin_size = (self.xBound[1] - self.depthStart) / (self.D * (1 + self.D))
+            ds = self.depthStart + bin_size * index * (index+1)
+        else:
+            ds = torch.arange(D, dtype=torch.float).view(-1, 1, 1, 1) + 0.5
         xys = torch.stack([xs+0.5, ys+0.5, ones], dim=-1).view(1, Hf, Wf, 3)
         frustum = xys * ds
         return frustum
@@ -145,7 +163,8 @@ class posEncoder3d(nn.Module):
         intrins = input['intrins'].clone()
         intrins[:, :, 0, :] *= ( Wf / W)
         intrins[:, :, 1, :] *= ( Hf/ H)
-        point3d = self.pointGenerator(Wf, Hf, self.D, intrins, input['rots'], input['trans'])
+        # point3d = self.pointGenerator(Wf, Hf, self.D, intrins, input['rots'], input['trans'])
+        point3d = self.pointGenerator(Hf, Wf, self.D, intrins, input['rectRots'])
         # if self.bev_aug and self.training:
         #     bev_rot = input['bev_rot'].view(B, N, 1, 1, 1, 3, 3)
         #     img_pos = bev_rot.matmul(img_pos.unsqueeze(-1)).squeeze(-1)
@@ -222,19 +241,20 @@ class PETR(nn.Module):
     def forward(self, input):
         feat2d, point3dPE, point2dFE = self.positionEncoder3D(input)
         outputFeats, outputRefs = self.transformer(feat2d, point3dPE, point2dFE)
-        cls_score = self.clsMLP(outputFeats[-1])
+        cls_score = self.clsMLP(outputFeats[-1]).float()
         bboxes = self.bboxMLP(outputFeats[-1])
-        bboxes = self.decode_boxes(bboxes, outputRefs[-1])
-        return cls_score, bboxes
+        bboxes = self.decode_boxes(bboxes, outputRefs[-1]).float()
+        pred = {'pred_logits': cls_score, 'pred_boxes': bboxes}
+        return pred
         
         
 if __name__ == '__main__':
     num_views = 2
     input_channels = 3
     grid = {}
-    grid['xbound'] = [-65, 65]
-    grid['ybound'] = [-65, 65]
-    grid['zbound'] = [-8, 8]
+    grid['xbound'] = [-61.2, 61.2]
+    grid['ybound'] = [-61.2, 61.2]
+    grid['zbound'] = [-10, 10]
     xBound = grid['xbound']
     yBound = grid['ybound']
     zBound = grid['zbound']
@@ -244,9 +264,10 @@ if __name__ == '__main__':
     input = {}
     input['image'] = input_images
     input['rots'] = torch.randn(2, num_views, 3, 3)
-    input['intrins'] = torch.randn(2, num_views, 3, 3)
+    input['rectRots'] = torch.randn(2, 3, 3)
+    input['intrins'] = torch.randn(2, num_views, 3, 4)
     input['trans'] = torch.randn(2, num_views, 3)
-    cls_score, bboxes = model(input)
-    print(cls_score.shape) # (B, 900, 3)
-    print(bboxes.shape) # (B, 900, 8)
+    pred = model(input)
+    print(pred['pred_logits'].shape) # (B, 900, 10)
+    print(pred['pred_boxes'].shape) # (B, 900, 8)
     

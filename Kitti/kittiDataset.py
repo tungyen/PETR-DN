@@ -17,29 +17,29 @@ mp = {
 }
 
 class KittiDataset(Dataset):
-    def __init__(self, width, height, objectNum=20, transform=None, mode="train"):
+    def __init__(self, width, height, root="./", objectNum=20, transform=None, mode="train"):
         self.transform = transform
         self.mode = mode
         self.width = width
         self.height = height
         self.objectNum = objectNum
+        self.root = root
             
         if self.mode == 'train':
-            self.files = "train.txt"
+            self.files = os.path.join(self.root, "train.txt")
             self.folderName = "training"
         elif self.mode == 'eval':
-            self.files = 'eval.txt'
+            self.files = os.path.join(self.root, 'eval.txt')
             self.folderName = "training"
         else:
             self.files = 'test.txt'
-            self.folderName = "testing"
+            self.folderName = os.path.join(self.root, "testing")
 
         self.names = []
         with open(self.files, "r") as file:
             for line in file:
-                self.names.append(line.strip())
-                
-        self.cams = [folder for folder in os.listdir(os.getcwd()) if len(folder.split('_'))==2]
+                self.names.append(line.strip())   
+        self.cams = [folder for folder in os.listdir(self.root) if len(folder.split('_'))==2]
 
     def __len__(self):
         return len(self.names)
@@ -48,13 +48,13 @@ class KittiDataset(Dataset):
         filename = self.names[index]
         
         # Image
-        root = os.path.join(cam, self.folderName)
+        root = os.path.join(self.root, cam, self.folderName)
         folder = os.listdir(root)[0]
         root = os.path.join(root, folder)
         imgPath = os.path.join(root, filename+".png")
         
         # Calibration
-        calibPath = os.path.join("calib", self.folderName, "calib", filename+".txt")
+        calibPath = os.path.join(self.root, "calib", self.folderName, "calib", filename+".txt")
         with open(calibPath, 'r') as file:
             for index, line in enumerate(file):
                 values = line.split()[1:]
@@ -77,7 +77,7 @@ class KittiDataset(Dataset):
         if self.mode == "test":
             return imgPath, intrin, rectRot, rot, t
         else:
-            bboxPath = os.path.join("label", "training", "label_2", filename+".txt")
+            bboxPath = os.path.join(self.root, "label", "training", "label_2", filename+".txt")
             bboxes = []
             categories = []
             with open(bboxPath, 'r') as file:
@@ -152,6 +152,8 @@ if __name__ == '__main__':
         print(trans.shape)
         print(intrins.shape)
         print(rectRot.shape)
+        print(box3d.shape)
+        print(labels.shape)
         break
         
         
