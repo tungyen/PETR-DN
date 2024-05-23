@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F 
-from .matcher import HungarianMatcher
+from PETR.matcher import HungarianMatcher
 
 class PETR_loss(nn.Module):
     def __init__(self, num_cls):

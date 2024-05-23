@@ -107,24 +107,29 @@ class KittiDataset(Dataset):
             intrin[0, :] *= ( self.width / imgW)
             intrin[1, :] *= ( self.height / imgH)
             imgs.append(self.transform(img))
-            rots.append(torch.Tensor(rot))
-            trans.append(torch.Tensor(t))
-            intrins.append(torch.Tensor(intrin))
-        rectRot = torch.tensor(rectRot)
+            rots.append(torch.FloatTensor(rot))
+            trans.append(torch.FloatTensor(t))
+            intrins.append(torch.FloatTensor(intrin))
+        rectRot = torch.FloatTensor(rectRot)
 
         imgs = torch.stack(imgs)
         rots = torch.stack(rots)
         intrins = torch.stack(intrins)
         trans = torch.stack(trans)
         
+        # print("Dtype of rectRot: ", rectRot.dtype)
+        # print("Dtype of img: ", imgs.dtype)
+        # print("Dtype of K: ", intrins.dtype)
+        
         if self.mode == "train" or self.mode == 'eval':
             box3d = torch.zeros(self.objectNum, 7)
             labels = torch.ones(self.objectNum) * -1
             labels[:len(categories)] = torch.tensor(categories)
             box3d[:len(bboxes), :] = torch.tensor(bboxes)
-            return imgs, rots, trans, intrins, rectRot, box3d, labels
+            datas = {"image":imgs, "rots":rots, "intrins":intrins, "rectRots":rectRot, "box3d":box3d, "labels":labels}
         else:
-            return imgs, rots, trans, intrins, rectRot
+            datas = {"image":imgs, "rots":rots, "intrins":intrins, "rectRots":rectRot}
+        return datas
                 
 if __name__ == '__main__':
     transform = transforms.Compose([
@@ -133,27 +138,14 @@ if __name__ == '__main__':
     ])
     
     dataset = KittiDataset(1280, 640, transform=transform)
-    # for data in dataset:
-    #     imgs, rots, trans, intrins, rectRot, box3d, labels = data
-    #     print(imgs.shape)
-    #     print(rots.shape)
-    #     print(trans.shape)
-    #     print(intrins.shape)
-    #     print(rectRot.shape)
-    #     break
-    
+
     B = 2
     nw = 0
     trainDataloader = DataLoader(dataset, batch_size=B, shuffle=True, pin_memory=True, num_workers=nw)
     
-    for imgs, rots, trans, intrins, rectRot, box3d, labels in trainDataloader:
-        print(imgs.shape)
-        print(rots.shape)
-        print(trans.shape)
-        print(intrins.shape)
-        print(rectRot.shape)
-        print(box3d.shape)
-        print(labels.shape)
+    for datas in trainDataloader:
+        print(datas['image'].shape)
+        print(datas['intrins'].shape)
         break
         
         

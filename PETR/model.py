@@ -3,8 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-from .cameraEncoder import CamEncoder
-from .transformer import *
+from PETR.cameraEncoder import CamEncoder
+from PETR.transformer import Transformer
 
 def inverse_sigmoid(x, eps=1e-5):
     x = x.clamp(min=0, max=1)
@@ -97,7 +97,8 @@ class posEncoder3d(nn.Module):
         points = frustum.view(1, 1, D, Hf, Wf, 3).repeat(B, N, 1, 1, 1, 1)
         
         if rectRot != None:
-            inv_rectRot = torch.inverse(rectRot).view(B, 1, 1, 1, 3, 3)[:, None, ...]
+            # inv_rectRot = torch.inverse(rectRot).view(B, 1, 1, 1, 3, 3)[:, None, ...]
+            inv_rectRot = torch.linalg.inv(rectRot).view(B, 1, 1, 1, 3, 3)[:, None, ...]
             points = inv_rectRot.matmul(points.unsqueeze(-1)).squeeze(-1)
         
         homo_tensor_points = torch.ones((B, N, D, Hf, Wf, 1))
@@ -112,7 +113,6 @@ class posEncoder3d(nn.Module):
         points = points / points[...,-1].unsqueeze(-1)
         points = points[...,:-1]
         points = self.posNorm(points)
-        print(points.shape)
         return points
     
     def posNorm(self, points):
@@ -211,7 +211,7 @@ class PETR(nn.Module):
         self.bboxMLP = nn.Sequential(
             nn.Linear(256, 256),
             nn.ReLU(inplace=True),
-            nn.Linear(256, 8)
+            nn.Linear(256, 7)
         )
         
         self.init_parameters()
@@ -265,9 +265,10 @@ if __name__ == '__main__':
     input['image'] = input_images
     input['rots'] = torch.randn(2, num_views, 3, 3)
     input['rectRots'] = torch.randn(2, 3, 3)
+    print("Dtype of rectRot: ", input['rectRots'].dtype)
     input['intrins'] = torch.randn(2, num_views, 3, 4)
     input['trans'] = torch.randn(2, num_views, 3)
     pred = model(input)
     print(pred['pred_logits'].shape) # (B, 900, 10)
-    print(pred['pred_boxes'].shape) # (B, 900, 8)
+    print(pred['pred_boxes'].shape) # (B, 900, 7)
     
