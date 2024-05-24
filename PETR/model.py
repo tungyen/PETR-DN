@@ -91,8 +91,9 @@ class posEncoder3d(nn.Module):
         # points += translations.view(B, N, 1, 1, 1, 3)
         # points = self.posNorm(points)
         # return points
+        device = K.device
         frustum = self.getFrustum(Hf, Wf, D)
-        frustum = frustum.to(K.device)
+        frustum = frustum.to(device)
         B, N, _, _ = K.shape
         points = frustum.view(1, 1, D, Hf, Wf, 3).repeat(B, N, 1, 1, 1, 1)
         
@@ -101,10 +102,10 @@ class posEncoder3d(nn.Module):
             inv_rectRot = torch.linalg.inv(rectRot).view(B, 1, 1, 1, 3, 3)[:, None, ...]
             points = inv_rectRot.matmul(points.unsqueeze(-1)).squeeze(-1)
         
-        homo_tensor_points = torch.ones((B, N, D, Hf, Wf, 1))
+        homo_tensor_points = torch.ones((B, N, D, Hf, Wf, 1)).to(device)
         points = torch.cat((points, homo_tensor_points), dim=-1) # (B, N, D, Hf, Wf, 4)
 
-        homo_tensor_K = torch.zeros((B, N, 1, 4))
+        homo_tensor_K = torch.zeros((B, N, 1, 4)).to(device)
         homo_tensor_K[:, :, 0, 3] = 1
         K = torch.cat((K, homo_tensor_K), dim=2) # (B, N, 4, 4)
         inv_K = torch.inverse(K).view(B, N, 1, 1, 1, 4, 4)
@@ -147,9 +148,9 @@ class posEncoder3d(nn.Module):
         frustum = xys * ds
         return frustum
     
-    def forward(self, input):
-        B, N, _, H, W = input['image'].size()
-        x = self.CamEncoder(input['image'])
+    def forward(self, data):
+        B, N, _, H, W = data['image'].size()
+        x = self.CamEncoder(data['image'])
         B, N, Cf, Hf, Wf = x.size()
         x = x.view(-1, Cf, Hf, Wf)
         BN = x.shape[0]
@@ -160,11 +161,11 @@ class posEncoder3d(nn.Module):
 
         # depth_dist = self.depth_conv(x).sigmoid()
 
-        intrins = input['intrins'].clone()
+        intrins = data['intrins'].clone()
         intrins[:, :, 0, :] *= ( Wf / W)
         intrins[:, :, 1, :] *= ( Hf/ H)
         # point3d = self.pointGenerator(Wf, Hf, self.D, intrins, input['rots'], input['trans'])
-        point3d = self.pointGenerator(Hf, Wf, self.D, intrins, input['rectRots'])
+        point3d = self.pointGenerator(Hf, Wf, self.D, intrins, data['rectRots'])
         # if self.bev_aug and self.training:
         #     bev_rot = input['bev_rot'].view(B, N, 1, 1, 1, 3, 3)
         #     img_pos = bev_rot.matmul(img_pos.unsqueeze(-1)).squeeze(-1)
@@ -176,7 +177,7 @@ class posEncoder3d(nn.Module):
         point3dPE = point3dPE.permute(0,2,3,1) # BN x H x W x C
         point3dPE = point3dPE.reshape(B, -1, 256)
 
-        point2dFE = sin_positional_encoding3D((B, N, Hf, Wf))
+        point2dFE = sin_positional_encoding3D((B, N, Hf, Wf), device=intrins.device)
         point2dFE = point2dFE.permute(0, 1, 4, 2, 3).contiguous().view(BN, -1, Hf, Wf)
         point2dFE = self.adapt_pos2d(point2dFE)
         point2dFE = point2dFE.permute(0,2,3,1)
