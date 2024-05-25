@@ -20,12 +20,12 @@ spec:
         requests:
           cpu: "4"
           memory: "32Gi"
-          ephemeral-storage: "10Gi"
+          ephemeral-storage: "15Gi"
           nvidia.com/gpu: "1"
         limits:
           cpu: "4"
           memory: "32Gi"
-          ephemeral-storage: "20Gi"
+          ephemeral-storage: "30Gi"
           nvidia.com/gpu: "1"
       volumeMounts:
         - name: dshm

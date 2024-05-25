@@ -19,7 +19,6 @@ from PETR import matcher
 
 lr0 = 0.005
 weight_decay = 0.01
-scheduler = 'lambda'
 lrf = 0.05
 max_epoch = 12
 momentum = 0.9
@@ -60,8 +59,8 @@ def make_optimizer(model):
             {'params': pg2, 'lr':lr0, 'weight_decay': 0.}]
 
     optimizer = optim.AdamW(params, betas=(momentum, 0.999))
-
-    if scheduler == 'lamda':
+    scheduler = 'lambda'
+    if scheduler == 'lambda':
         lf = one_cycle(1, lrf, max_epoch)
         scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
     else:
@@ -115,15 +114,13 @@ def PETR_train():
     optimizer, scheduler = make_optimizer(model)
     criterion = petr_loss(num_cls=num_cls)
     
-    for epoch in tqdm(range(epoch)):
+    for epoch in tqdm(range(max_epoch)):
         print("Epoch {} start now!".format(epoch+1))
         
         # train
         for data in trainDataloader:
             data, tgt = seperateData(data)
             pred = model(data)
-            # print(pred['pred_logits'].shape) # (B, 900, 8)
-            # print(pred['pred_boxes'].shape) # (B, 900, 7)
             loss, _ = criterion(pred, tgt)
             loss.backward()
             optimizer.step()
