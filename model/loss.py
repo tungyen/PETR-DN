@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F 
-from petr.matcher import HungarianMatcher
+from .matcher import HungarianMatcher
 
 from . import iou3d_nms_cuda
 
@@ -11,14 +11,31 @@ class PETR_loss(nn.Module):
         self.matcher = HungarianMatcher()
         self.num_cls = num_cls
         
-    def forward(self, pred, tgt):
+    def forward(self, pred, tgt, cls_score_aux, bboxes_aux):
         # Inputs:
         #     pred - Include "pred_logits" with shape (B, N_query, num_cls) and "pred_boxes" with shape (B, N_query, 7)
         #     tgt - Include "labels" with shape (B, object_max_num) and "gt_boxes" with shape (B, object_max_num, 7)
+        #     cls_score_aux - The list including label outputs from each transformer layer 
+        #     bboxes_aux - The list including bounding box outputs from each transformer layer
         # Outputs:
         #     loss - The sum of class loss and boxes loss
         #     loss_tag - Include loss_cls, boxes_loss, and total_loss
         
+        # Compute the aux loss first
+        loss_aux = 0
+        if cls_score_aux is not None and bboxes_aux is not None:
+            for i in range(len(cls_score_aux)):
+                pred_aux = {'pred_logits': cls_score_aux[i], 'pred_boxes': bboxes_aux[i]}
+                with torch.cuda.amp.autocast(enabled=False):
+                    loss_aux_i, _ = self.get_loss(pred_aux, tgt.float())
+                loss_aux = loss_aux + loss_aux_i
+        loss, loss_tags = self.get_loss(pred, tgt.float())
+        if len(cls_score_aux) != 0:
+            loss += loss_aux
+            loss_tags['aux_loss'] = loss_aux.clone().detach()
+        return loss, loss_tags     
+
+    def get_loss(self, pred, tgt):
         # Filter all valid object labels and bounding boxes from the dataset output
         tgt_list = []
         for i in range(tgt['labels'].shape[0]):
@@ -71,7 +88,7 @@ class PETR_loss(nn.Module):
         target_labels_onehot.scatter_(2, target_labels_table.unsqueeze(-1), 1)
 
         target_labels_onehot = target_labels_onehot[:, :, :-1]
-        loss = self.sigmoid_focal_loss(cls_scores, target_labels_onehot, totalBox)
+        loss = sigmoid_focal_loss(cls_scores, target_labels_onehot, totalBox)
         return loss
     
     def loss_box(self, pred, tgt_list, indices, totalBox):
@@ -109,17 +126,104 @@ class PETR_loss(nn.Module):
         batchIndex = torch.cat([torch.full_like(col, i) for i, (_, col) in enumerate(indices)])
         objectIndex = torch.cat([col for (_, col) in indices])
         return batchIndex, objectIndex
+    
+class DN_loss(nn.Module):
+    def __init__(self, training, aux_num=5, focal_alpha=0.25):
+        super(DN_loss, self).__init__()
+        self.training = training
+        self.aux_num = aux_num
+        self.focal_alpha = focal_alpha
         
+    def forward(self, mask_dict):
+        losses = {}
+        if self.training and 'output_known_lbs_bboxes' in mask_dict:
+            known_labels, known_bboxs, output_known_class, output_known_coord, \
+            num_tgt = self.prepare_loss(mask_dict)
+            losses.update(self.label_loss(output_known_class[-1], known_labels, num_tgt))
+            losses.update(self.box_loss(output_known_coord[-1], known_bboxs, num_tgt))
+        else:
+            losses['tgt_loss_bbox'] = torch.as_tensor(0.).to('cuda')
+            losses['tgt_loss_giou'] = torch.as_tensor(0.).to('cuda')
+            losses['tgt_loss_ce'] = torch.as_tensor(0.).to('cuda')
+            losses['tgt_class_error'] = torch.as_tensor(0.).to('cuda')
+            
+        for i in range(self.aux_num):
+            if self.training and 'output_known_lbs_bboxes' in mask_dict:
+                l_dict = self.label_loss(output_known_class[i], known_labels, num_tgt)
+                l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
+                losses.update(l_dict)
+                l_dict = self.box_loss(output_known_coord[i], known_bboxs, num_tgt)
+                l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
+                losses.update(l_dict)
+            else:
+                l_dict = dict()
+                l_dict['tgt_loss_bbox'] = torch.as_tensor(0.).to('cuda')
+                l_dict['tgt_class_error'] = torch.as_tensor(0.).to('cuda')
+                l_dict['tgt_loss_giou'] = torch.as_tensor(0.).to('cuda')
+                l_dict['tgt_loss_ce'] = torch.as_tensor(0.).to('cuda')
+                l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
+                losses.update(l_dict)
+        return losses
+            
+    def prepare_loss(self, mask_dict):
+        # Prepare needy variables
+        output_known_class, output_known_coord = mask_dict['output_known_lbs_bboxes']
+        known_labels, known_bboxs = mask_dict['known_lbs_bboxes']
+        map_known_indice = mask_dict['map_known_indice']
+        known_indice = mask_dict['known_indice']
+        batch_idx = mask_dict['batch_idx']
+        bid = batch_idx[known_indice]
         
-    def sigmoid_focal_loss(self, cls_scores, target_labels_onehot, totalBox, alpha=0.25, gamma=2):
-        prob = cls_scores.sigmoid()
-        ce_loss = F.binary_cross_entropy_with_logits(cls_scores, target_labels_onehot, reduction="none")
-        p_t = prob * target_labels_onehot + (1 - prob) * (1 - target_labels_onehot)
-        loss = ce_loss * ((1 - p_t) ** gamma)
-        if alpha >= 0:
-            alpha_t = alpha * target_labels_onehot + (1 - alpha) * (1 - target_labels_onehot)
-            loss = alpha_t * loss
-        return loss.sum() / totalBox
+        # Get corresponding box from the transformer output
+        if len(output_known_class) > 0:
+            output_known_class = output_known_class.permute(1, 2, 0, 3)[(bid, map_known_indice)].permute(1, 0, 2)
+            output_known_coord = output_known_coord.permute(1, 2, 0, 3)[(bid, map_known_indice)].permute(1, 0, 2)
+        num_tgt = known_indice.numel()
+        return known_labels, known_bboxs, output_known_class, output_known_coord, num_tgt
+        
+    def box_loss(self, src_boxes, tgt_boxes, num_tgt):
+        if len(tgt_boxes) == 0:
+            return {
+                'tgt_loss_bbox': torch.as_tensor(0.).to('cuda'),
+                'tgt_loss_giou': torch.as_tensor(0.).to('cuda'),
+            }
+
+        loss_bbox = F.l1_loss(src_boxes, tgt_boxes, reduction='none')
+        losses = {}
+        losses['tgt_loss_bbox'] = loss_bbox.sum() / num_tgt
+
+        loss_giou = 1 - torch.diag(boxes_iou3d_gpu(src_boxes, tgt_boxes))
+        losses['tgt_loss_giou'] = loss_giou.sum() / num_tgt
+        return losses
+    
+    def label_loss(self, src_logits_, tgt_labels_, num_tgt):
+        if len(tgt_labels_) == 0:
+            return {
+                'tgt_loss_ce': torch.as_tensor(0.).to('cuda'),
+                'tgt_class_error': torch.as_tensor(0.).to('cuda'),
+            }
+            
+        src_logits, tgt_labels= src_logits_.unsqueeze(0), tgt_labels_.unsqueeze(0)
+        target_classes_onehot = torch.zeros([src_logits.shape[0], src_logits.shape[1], src_logits.shape[2] + 1],
+                                            dtype=src_logits.dtype, layout=src_logits.layout, device=src_logits.device)
+
+        target_classes_onehot.scatter_(2, tgt_labels.unsqueeze(-1), 1)
+        target_classes_onehot = target_classes_onehot[:, :, :-1]
+        loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_tgt, alpha=self.focal_alpha, gamma=2) * src_logits.shape[1]
+
+        losses = {'tgt_loss_ce': loss_ce}
+        return losses
+            
+        
+def sigmoid_focal_loss(cls_scores, target_labels_onehot, totalBox, alpha=0.25, gamma=2):
+    prob = cls_scores.sigmoid()
+    ce_loss = F.binary_cross_entropy_with_logits(cls_scores, target_labels_onehot, reduction="none")
+    p_t = prob * target_labels_onehot + (1 - prob) * (1 - target_labels_onehot)
+    loss = ce_loss * ((1 - p_t) ** gamma)
+    if alpha >= 0:
+        alpha_t = alpha * target_labels_onehot + (1 - alpha) * (1 - target_labels_onehot)
+        loss = alpha_t * loss
+    return loss.sum() / totalBox
     
 
 def boxes_iou3d_gpu(boxes_a, boxes_b):
@@ -128,7 +232,6 @@ def boxes_iou3d_gpu(boxes_a, boxes_b):
     #     boxes_b: (N, 7) [x, y, z, dx, dy, dz, heading]
     # Outputs:
     #     ans_iou: (N, N)
-
 
     # height overlap
     boxes_a_height_max = (boxes_a[:, 2] + boxes_a[:, 5] / 2).view(-1, 1)
@@ -146,10 +249,18 @@ def boxes_iou3d_gpu(boxes_a, boxes_b):
 
     # 3d iou
     overlaps_3d = overlaps_bev * overlaps_h
-
     vol_a = (boxes_a[:, 3] * boxes_a[:, 4] * boxes_a[:, 5]).view(-1, 1)
     vol_b = (boxes_b[:, 3] * boxes_b[:, 4] * boxes_b[:, 5]).view(1, -1)
-
     iou3d = overlaps_3d / torch.clamp(vol_a + vol_b - overlaps_3d, min=1e-6)
-
     return iou3d
+
+def dn_post_process(outputs_class, outputs_coord, mask_dict):
+    if mask_dict and mask_dict['pad_size'] > 0:
+        output_known_class = outputs_class[:, :, :mask_dict['pad_size'], :]
+        output_known_coord = outputs_coord[:, :, :mask_dict['pad_size'], :]
+        
+        outputs_class = outputs_class[:, :, mask_dict['pad_size']:, :]
+        outputs_coord = outputs_coord[:, :, mask_dict['pad_size']:, :]
+        mask_dict['output_known_lbs_bboxes']=(output_known_class,output_known_coord)
+        
+    return outputs_class, outputs_coord

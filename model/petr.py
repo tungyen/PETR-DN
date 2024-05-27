@@ -3,8 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-from PETR.cameraEncoder import CamEncoder
-from PETR.transformer import Transformer
+from .cameraEncoder import CamEncoder
+from .transformer import Transformer
 
 def inverse_sigmoid(x, eps=1e-5):
     x = x.clamp(min=0, max=1)
@@ -69,6 +69,12 @@ class posEncoder3d(nn.Module):
             nn.ReLU(),
             nn.Conv2d(1024, 256, kernel_size=1, stride=1, padding=0),
         )
+    
+    def freeze_bn(self):
+        '''Freeze BatchNorm layers.'''
+        for layer in self.CamEncoder.trunk.modules():
+            if isinstance(layer, nn.BatchNorm2d):
+                layer.eval() 
     
     # def pointGenerator(self, Hf, Wf, D, I, rots, translations):
     def pointGenerator(self, Hf, Wf, D, K, rectRot=None):
@@ -164,7 +170,6 @@ class posEncoder3d(nn.Module):
         intrins = data['intrins'].clone()
         intrins[:, :, 0, :] *= ( Wf / W)
         intrins[:, :, 1, :] *= ( Hf/ H)
-        # point3d = self.pointGenerator(Wf, Hf, self.D, intrins, input['rots'], input['trans'])
         point3d = self.pointGenerator(Hf, Wf, self.D, intrins, data['rectRots'])
         # if self.bev_aug and self.training:
         #     bev_rot = input['bev_rot'].view(B, N, 1, 1, 1, 3, 3)
@@ -242,11 +247,24 @@ class PETR(nn.Module):
     def forward(self, input):
         feat2d, point3dPE, point2dFE = self.positionEncoder3D(input)
         outputFeats, outputRefs = self.transformer(feat2d, point3dPE, point2dFE)
-        cls_score = self.clsMLP(outputFeats[-1]).float()
-        bboxes = self.bboxMLP(outputFeats[-1])
-        bboxes = self.decode_boxes(bboxes, outputRefs[-1]).float()
+        
+        if self.auxLoss:
+            cls_score = [self.clsMLP[i](outputFeats[i]).float() for i in range(len(outputFeats))]
+            bboxes = [self.bboxMLP[i](outputFeats[i]) for i in range(len(outputFeats))]
+            bboxes = [self.decode_boxes(bboxes[i], outputRefs[i]).float() for i in range(len(outputFeats))]
+            
+            cls_score_aux = cls_score[:-1]
+            bboxes_aux = bboxes[:-1]
+            cls_score = cls_score[-1]
+            bboxes = bboxes[-1]
+        else:
+            cls_score_aux = None
+            bboxes_aux = None
+            cls_score = self.clsMLP(outputFeats[-1]).float()
+            bboxes = self.bboxMLP(outputFeats[-1])
+            bboxes = self.decode_boxes(bboxes, outputRefs[-1]).float()
         pred = {'pred_logits': cls_score, 'pred_boxes': bboxes}
-        return pred
+        return pred, cls_score_aux, bboxes_aux
         
         
 if __name__ == '__main__':
@@ -260,16 +278,16 @@ if __name__ == '__main__':
     yBound = grid['ybound']
     zBound = grid['zbound']
     input_images = torch.randn(2, num_views, input_channels, 224, 224)
-    model = PETR(grid=grid, camNum=num_views, camC=2048, D=64, clsNum=10, decoderLayerNum=1)
+    model = PETR(grid=grid, camNum=num_views, camC=2048, D=64, clsNum=10, decoderLayerNum=2, auxLoss=True)
     
     input = {}
     input['image'] = input_images
     input['rots'] = torch.randn(2, num_views, 3, 3)
     input['rectRots'] = torch.randn(2, 3, 3)
-    print("Dtype of rectRot: ", input['rectRots'].dtype)
     input['intrins'] = torch.randn(2, num_views, 3, 4)
     input['trans'] = torch.randn(2, num_views, 3)
-    pred = model(input)
+    pred, cls_score_aux, bboxes_aux = model(input)
     print(pred['pred_logits'].shape) # (B, 900, 10)
     print(pred['pred_boxes'].shape) # (B, 900, 7)
+    print(len(cls_score_aux))
     

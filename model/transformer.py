@@ -42,8 +42,9 @@ class resBlock(nn.Module):
         return out
 
 class TransformerDecoderLayer(nn.Module):
-    def __init__(self, dim_emb=256, dim_resblock=1024, dropout=0.0, numHead=8):
+    def __init__(self, dim_emb=256, dim_resblock=1024, dropout=0.0, numHead=8, attn_mask=None):
         super(TransformerDecoderLayer, self).__init__()
+        self.attn_mask = attn_mask
         self.iniAttn = nn.MultiheadAttention(dim_emb, numHead, dropout=dropout)
         self.dropout1 = nn.Dropout(dropout)
         self.LN1 = nn.LayerNorm(dim_emb)
@@ -66,7 +67,7 @@ class TransformerDecoderLayer(nn.Module):
         tgt = self.LN1(tgt)
         # self attention
         q = k = tgt + query_pos
-        tgt2 = self.selfAttn(q.transpose(0, 1), k.transpose(0, 1), tgt.transpose(0, 1))[0].transpose(0, 1)
+        tgt2 = self.selfAttn(q.transpose(0, 1), k.transpose(0, 1), tgt.transpose(0, 1), attn_mask=self.attn_mask)[0].transpose(0, 1)
         tgt = tgt + self.dropout3(tgt2)
         tgt = self.LN3(tgt)
 
