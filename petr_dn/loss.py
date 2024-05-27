@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F 
-from petr.matcher import HungarianMatcher
+from PETR.matcher import HungarianMatcher
 
 from . import iou3d_nms_cuda
 
