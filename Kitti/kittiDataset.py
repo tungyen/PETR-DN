@@ -32,8 +32,8 @@ class KittiDataset(Dataset):
             self.files = os.path.join(self.root, 'eval.txt')
             self.folderName = "training"
         else:
-            self.files = 'test.txt'
-            self.folderName = os.path.join(self.root, "testing")
+            self.files = os.path.join(self.root, 'test.txt')
+            self.folderName = "testing"
 
         self.names = []
         with open(self.files, "r") as file:
