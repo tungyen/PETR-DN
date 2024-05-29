@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.nn import functional as F 
 from .matcher import HungarianMatcher
 
-from . import iou3d_nms_cuda
+from .OpenPCDet.pcdet.ops.iou3d_nms import iou3d_nms_cuda
 
 class PETR_loss(nn.Module):
     def __init__(self, num_cls):
@@ -27,10 +27,10 @@ class PETR_loss(nn.Module):
             for i in range(len(cls_score_aux)):
                 pred_aux = {'pred_logits': cls_score_aux[i], 'pred_boxes': bboxes_aux[i]}
                 with torch.cuda.amp.autocast(enabled=False):
-                    loss_aux_i, _ = self.get_loss(pred_aux, tgt.float())
+                    loss_aux_i, _ = self.get_loss(pred_aux, tgt)
                 loss_aux = loss_aux + loss_aux_i
-        loss, loss_tags = self.get_loss(pred, tgt.float())
-        if len(cls_score_aux) != 0:
+        loss, loss_tags = self.get_loss(pred, tgt)
+        if cls_score_aux is not None:
             loss += loss_aux
             loss_tags['aux_loss'] = loss_aux.clone().detach()
         return loss, loss_tags     
@@ -43,7 +43,7 @@ class PETR_loss(nn.Module):
             masked_boxes = tgt['gt_boxes'][i, mask, :]
             masked_boxes = self.gt_boxes_process(masked_boxes)
             masked_labels = tgt['labels'][i, mask]
-            tgt_list.append({"labels":masked_labels, "gt_boxes":masked_boxes})
+            tgt_list.append({"labels":masked_labels.long(), "gt_boxes":masked_boxes.float()})
         indices, cost_tags = self.matcher(pred, tgt_list)
         totalBox = sum([t['labels'].shape[0] for t in tgt_list])
         
@@ -64,9 +64,9 @@ class PETR_loss(nn.Module):
         #     gt_boxes - The input ground truth boxes with shape (M, 7), where B is batch size and M is object number
         # Outputs:
         #     gt_boxes_processed - The processed gt boxes with shape (M, 7)
-        xyz = gt_boxes[:, 0:3]
-        wlh = gt_boxes[:, 3:6].log()
-        ang = gt_boxes[:, -1]
+        xyz = gt_boxes[:, 3:6]
+        wlh = gt_boxes[:, 0:3].log()
+        ang = gt_boxes[:, -1].view(-1, 1)
         gt_boxes_processed = torch.cat([xyz, wlh, ang], dim=-1)
         return gt_boxes_processed
     
@@ -104,7 +104,8 @@ class PETR_loss(nn.Module):
         target_boxes = torch.cat([t['gt_boxes'][col] for t, (_, col) in zip(tgt_list, indices)], dim=0)
         loss_bbox = F.l1_loss(pred_boxes, target_boxes, reduction='none').sum()
         loss_giou = torch.sum(1 - torch.diag(boxes_iou3d_gpu(pred_boxes, target_boxes)))
-        loss = (loss_bbox + loss_giou) /totalBox
+        # loss = (loss_bbox + loss_giou) /totalBox
+        loss = (loss_bbox) /totalBox
         return loss
         
     def getQueryIndex(self, indices):

@@ -12,9 +12,9 @@ from sklearn.metrics import average_precision_score
 import numpy as np
 
 from Kitti import KittiDataset
-from PETR import petr_loss
-from PETR import petr
-from PETR import matcher
+from model import petr_loss
+from model import petr
+from model import matcher
 # from metrics import *
 
 lr0 = 0.005
@@ -67,6 +67,17 @@ def make_optimizer(model):
         scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=steps, gamma=lrdecay)
     return optimizer, scheduler
 
+def gt_boxes_process(gt_boxes):
+    # Inputs:
+    #     gt_boxes - The input ground truth boxes with shape (M, 7), where B is batch size and M is object number
+    # Outputs:
+    #     gt_boxes_processed - The processed gt boxes with shape (M, 7)
+    xyz = gt_boxes[:, 3:6]
+    wlh = gt_boxes[:, 0:3].log()
+    ang = gt_boxes[:, -1].view(-1, 1)
+    gt_boxes_processed = torch.cat([xyz, wlh, ang], dim=-1)
+    return gt_boxes_processed
+
 def seperateData(data, device):
     # Inputs:
     #     data - Dict including the input data from the dataset with different tensors
@@ -88,6 +99,7 @@ def PETR_train():
     # Prepare for the dataset
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     kitti_path = "Kitti"
+    weightPath = "weight/petr.pth"
     
     transform = transforms.Compose([
         transforms.ToTensor(),
@@ -114,94 +126,98 @@ def PETR_train():
     optimizer, scheduler = make_optimizer(model)
     criterion = petr_loss(num_cls=num_cls)
     
-    for epoch in tqdm(range(max_epoch)):
+    for epoch in range(max_epoch):
         print("Epoch {} start now!".format(epoch+1))
         
         # train
-        for data in trainDataloader:
-            data, tgt = seperateData(data)
-            pred = model(data)
-            loss, _ = criterion(pred, tgt)
+        for i, data in enumerate(tqdm(trainDataloader)):
+            data, tgt = seperateData(data, device)
+            pred, cls_score_aux, bboxes_aux = model(data)
+            loss, _ = criterion(pred, tgt, cls_score_aux, bboxes_aux)
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
+            if i % 100 == 0:
+                torch.save(model.state_dict(), weightPath)
         scheduler.step()
         print("Epoch {}-training loss===>{}".format(epoch+1, loss.item()))
         
-        # Validation
-        with torch.no_grad():
-            AP_list = {}
-            count = {}
-            ATE = 0
-            ate_count = 0
-            for batch in evalDataloader:
-                # Get prediction and ground truth
-                data, tgt = seperateData(batch)
-                pred = model(data)
-                batch_tgt = []
-                for i in range(tgt['labels'].shape[0]):
-                    mask = tgt['gt_boxes'][i, :, 0] != -1
-                    masked_boxes = tgt['gt_boxes'][i, mask, :]
-                    masked_boxes = petr_loss.gt_boxes_process(masked_boxes)
-                    masked_labels = tgt['labels'][i, mask]
-                    batch_tgt.append({"labels":masked_labels, "gt_boxes":masked_boxes})
+        # # Validation
+        # with torch.no_grad():
+        #     AP_list = {}
+        #     count = {}
+        #     ATE = 0
+        #     ate_count = 0
+        #     for batch in tqdm(evalDataloader):
+        #         # Get prediction and ground truth
+        #         data, tgt = seperateData(batch, device)
+        #         pred, cls_score_aux, bboxes_aux = model(data)
+        #         batch_tgt = []
+        #         for i in range(tgt['labels'].shape[0]):
+        #             mask = tgt['gt_boxes'][i, :, 0] != -1
+        #             masked_boxes = tgt['gt_boxes'][i, mask, :]
+        #             masked_boxes = gt_boxes_process(masked_boxes)
+        #             masked_labels = tgt['labels'][i, mask]
+        #             batch_tgt.append({"labels":masked_labels, "gt_boxes":masked_boxes})
                 
-                # Process the batch case by case
-                batch_pred_logits, batch_pred_boxes = pred['pred_logits'], pred['pred_boxes']
-                B = batch_pred_logits.shape[0]
-                for i in range(B):
-                    pred_labels = torch.max(batch_pred_logits[i, :, :], dim=1)[1] # (900, )
-                    pred_boxes = batch_pred_boxes[i, :, :] # (900, 7)
-                    gt_labels = batch_tgt[i]['labels'] # (obj_num, )
-                    gt_boxes = batch_tgt[i]['gt_boxes'] # (obj_num, 7)
+        #         # Process the batch case by case
+        #         batch_pred_logits, batch_pred_boxes = pred['pred_logits'], pred['pred_boxes']
+        #         B = batch_pred_logits.shape[0]
+        #         for i in range(B):
+        #             pred_labels = torch.max(batch_pred_logits[i, :, :], dim=1)[1] # (900, )
+        #             pred_boxes = batch_pred_boxes[i, :, :] # (900, 7)
+        #             gt_labels = batch_tgt[i]['labels'] # (obj_num, )
+        #             gt_boxes = batch_tgt[i]['gt_boxes'] # (obj_num, 7)
                     
-                    uniques = torch.unique(torch.cat((pred_labels, gt_labels)))
-                    for cls in uniques:
-                        if cls not in count:
-                            count[cls] = 0.0
-                            AP_list[cls] = 0.0
+        #             uniques = torch.unique(torch.cat((pred_labels, gt_labels)))
+        #             for cls in uniques:
+        #                 if cls not in count:
+        #                     count[cls] = 0.0
+        #                     AP_list[cls] = 0.0
                         
-                        pred_boxes_cls = pred_boxes[pred_labels==cls, :]
-                        gt_boxes_cls = gt_boxes[gt_labels==cls, :]
+        #                 pred_boxes_cls = pred_boxes[pred_labels==cls, :]
+        #                 gt_boxes_cls = gt_boxes[gt_labels==cls, :]
                         
-                        if pred_boxes_cls.shape[0] == 0 or gt_boxes_cls.shape[0] == 0:
-                            continue
+        #                 if pred_boxes_cls.shape[0] == 0 or gt_boxes_cls.shape[0] == 0:
+        #                     continue
                         
-                        cost_boxes = torch.cdist(pred_boxes_cls, gt_boxes_cls, p=1)
-                        cost_boxes = cost_boxes / torch.max(cost_boxes)
-                        rows, cols = linear_sum_assignment(cost_boxes)
+        #                 cost_boxes = torch.cdist(pred_boxes_cls, gt_boxes_cls)
+        #                 cost_boxes = cost_boxes / torch.max(cost_boxes)
+        #                 rows, cols = linear_sum_assignment(cost_boxes.cpu())
                         
-                        # AP
-                        y_true = np.ones(gt_boxes_cls.shape[0])
-                        y_scores = cost_boxes[rows, cols].numpy()
-                        ap = average_precision_score(y_true, y_scores)
-                        AP_list[cls] += ap
-                        count[cls] += 1
+        #                 # AP
+        #                 if rows.shape[0] == gt_boxes_cls.shape[0]:
+        #                     y_true = np.ones(gt_boxes_cls.shape[0])
+        #                     y_scores = cost_boxes[rows, cols].cpu().numpy()
+        #                 else:
+        #                     # diff = gt_boxes_cls.shape[0] - rows.shape[0]
+        #                     # y_true = np.ones(gt_boxes_cls.shape[0])
+        #                     # y_true[:-diff] = 0
+        #                     # y_scores = cost_boxes[rows, cols].cpu().numpy()
+        #                     # y_scores = np.append(y_scores, np.full((diff,), np.inf))
+        #                     continue
                         
-                        # ATE
-                        pred_boxes_cls = pred_boxes_cls[rows]
-                        gt_boxes_cls = gt_boxes_cls[cols]
-                        ate = torch.sum((pred_boxes_cls[:, :3]-gt_boxes_cls[:, :3])**2) / pred_boxes_cls.shape[0]
-                        ATE += ate
-                        ate_count += 1
+        #                 ap = average_precision_score(y_true, y_scores)
+        #                 AP_list[cls] += ap
+        #                 count[cls] += 1
                         
-            ATE = ATE / ate_count
-            for cls in AP_list:
-                AP_list[cls] = AP_list[cls] / count[cls]
-            mAP = np.sum(AP_list.item().values()) / len(AP_list)
+        #                 # ATE
+        #                 pred_boxes_cls = pred_boxes_cls[rows]
+        #                 gt_boxes_cls = gt_boxes_cls[cols]
+        #                 ate = torch.sum((pred_boxes_cls[:, :3]-gt_boxes_cls[:, :3])**2) / pred_boxes_cls.shape[0]
+        #                 ATE += ate
+        #                 ate_count += 1
+                        
+        #     ATE = ATE / ate_count
+        #     for cls in AP_list:
+        #         if count[cls] == 0:
+        #             continue
+        #         AP_list[cls] = AP_list[cls] / count[cls]
+        #     mAP = sum(AP_list.values()) / len(AP_list)
             
-            print("mAP of epoch {} is {}.".format(epoch+1, mAP))
-            print("ATE of epoch {} is {}.".format(epoch+1, ATE))
+        #     print("mAP of epoch {} is {}.".format(epoch+1, mAP))
+        #     print("ATE of epoch {} is {}.".format(epoch+1, ATE))
                         
                         
-                        
-                        
-                    
-                    
-                    
-                    
-                
-
-    
 if __name__ == '__main__':
     PETR_train()

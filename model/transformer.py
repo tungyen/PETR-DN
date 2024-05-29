@@ -81,7 +81,7 @@ class TransformerDecoderLayer(nn.Module):
 
 class Transformer(nn.Module):
     def __init__(self, dim_model=256, headNum=8, decoderLayerNum=6, 
-                 dimBackbone=2048, dropout=0.1, queryNum=900):
+                 dimBackbone=2048, dropout=0.1, queryNum=100):
         super(Transformer, self).__init__()
         self.dim_model = dim_model
         self.headNum = headNum

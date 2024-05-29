@@ -17,7 +17,7 @@ mp = {
 }
 
 class KittiDataset(Dataset):
-    def __init__(self, width, height, root="./", objectNum=20, transform=None, mode="train"):
+    def __init__(self, width, height, root="./", objectNum=100, transform=None, mode="train"):
         self.transform = transform
         self.mode = mode
         self.width = width
@@ -75,7 +75,7 @@ class KittiDataset(Dataset):
             
         # Bounding boxes
         if self.mode == "test":
-            return imgPath, intrin, rectRot, rot, t
+            return imgPath, intrin, rectRot, rot, t, filename
         else:
             bboxPath = os.path.join(self.root, "label", "training", "label_2", filename+".txt")
             bboxes = []
@@ -88,7 +88,7 @@ class KittiDataset(Dataset):
                     categories.append(mp[values[0]])
                     boxInfo = [float(info) for info in values[8:]]
                     bboxes.append(boxInfo)
-            return imgPath, intrin, rectRot, rot, t, bboxes, categories
+            return imgPath, intrin, rectRot, rot, t, bboxes, categories, filename
     
 
     def __getitem__(self, index):
@@ -98,9 +98,9 @@ class KittiDataset(Dataset):
         intrins = []
         for cam in self.cams:
             if self.mode == "train" or self.mode == 'eval':
-                imgPath, intrin, rectRot, rot, t, bboxes, categories = self.getData(index, cam)
+                imgPath, intrin, rectRot, rot, t, bboxes, categories, filename = self.getData(index, cam)
             else:
-                imgPath, intrin, rectRot, rot, t = self.getData(index, cam)
+                imgPath, intrin, rectRot, rot, t, filename = self.getData(index, cam)
             img = Image.open(imgPath) # (w, h)
             imgW, imgH = img.size
             img = img.resize((self.width, self.height), resample=Image.NEAREST)
@@ -117,18 +117,14 @@ class KittiDataset(Dataset):
         intrins = torch.stack(intrins)
         trans = torch.stack(trans)
         
-        # print("Dtype of rectRot: ", rectRot.dtype)
-        # print("Dtype of img: ", imgs.dtype)
-        # print("Dtype of K: ", intrins.dtype)
-        
         if self.mode == "train" or self.mode == 'eval':
-            box3d = torch.zeros(self.objectNum, 7)
+            box3d = torch.ones(self.objectNum, 7) * -1
             labels = torch.ones(self.objectNum) * -1
             labels[:len(categories)] = torch.tensor(categories)
             box3d[:len(bboxes), :] = torch.tensor(bboxes)
-            datas = {"image":imgs, "rots":rots, "intrins":intrins, "rectRots":rectRot, "box3d":box3d, "labels":labels}
+            datas = {"image":imgs, "rots":rots, "intrins":intrins, "rectRots":rectRot, "box3d":box3d, "labels":labels, "filename":filename}
         else:
-            datas = {"image":imgs, "rots":rots, "intrins":intrins, "rectRots":rectRot}
+            datas = {"image":imgs, "rots":rots, "intrins":intrins, "rectRots":rectRot, "filename":filename}
         return datas
                 
 if __name__ == '__main__':

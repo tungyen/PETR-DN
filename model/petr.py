@@ -103,11 +103,6 @@ class posEncoder3d(nn.Module):
         B, N, _, _ = K.shape
         points = frustum.view(1, 1, D, Hf, Wf, 3).repeat(B, N, 1, 1, 1, 1)
         
-        if rectRot != None:
-            # inv_rectRot = torch.inverse(rectRot).view(B, 1, 1, 1, 3, 3)[:, None, ...]
-            inv_rectRot = torch.linalg.inv(rectRot).view(B, 1, 1, 1, 3, 3)[:, None, ...]
-            points = inv_rectRot.matmul(points.unsqueeze(-1)).squeeze(-1)
-        
         homo_tensor_points = torch.ones((B, N, D, Hf, Wf, 1)).to(device)
         points = torch.cat((points, homo_tensor_points), dim=-1) # (B, N, D, Hf, Wf, 4)
 
@@ -116,9 +111,12 @@ class posEncoder3d(nn.Module):
         K = torch.cat((K, homo_tensor_K), dim=2) # (B, N, 4, 4)
         inv_K = torch.inverse(K).view(B, N, 1, 1, 1, 4, 4)
         points = inv_K.matmul(points.unsqueeze(-1)).squeeze(-1)
-        
-        points = points / points[...,-1].unsqueeze(-1)
         points = points[...,:-1]
+        
+        if rectRot != None:
+            inv_rectRot = torch.linalg.inv(rectRot).view(B, 1, 1, 1, 3, 3)[:, None, ...]
+            points = inv_rectRot.matmul(points.unsqueeze(-1)).squeeze(-1)
+        
         points = self.posNorm(points)
         return points
     
@@ -165,22 +163,20 @@ class posEncoder3d(nn.Module):
         feat2d = feat.permute(0, 2, 3, 1) # BN x H x W x C
         feat2d = feat2d.reshape(B, -1, 256)
 
-        # depth_dist = self.depth_conv(x).sigmoid()
+        depth_dist = self.depth_conv(x).sigmoid()
 
         intrins = data['intrins'].clone()
         intrins[:, :, 0, :] *= ( Wf / W)
         intrins[:, :, 1, :] *= ( Hf/ H)
         point3d = self.pointGenerator(Hf, Wf, self.D, intrins, data['rectRots'])
-        # if self.bev_aug and self.training:
-        #     bev_rot = input['bev_rot'].view(B, N, 1, 1, 1, 3, 3)
-        #     img_pos = bev_rot.matmul(img_pos.unsqueeze(-1)).squeeze(-1)
 
         point3dNorm = self.posNorm(point3d) # BxNxDxHxWx3
         point3dNorm = point3dNorm.permute(0, 1, 2, 5, 3, 4).contiguous().view(BN, -1, Hf, Wf)        
         point3dPE = self.pos_conv(point3dNorm)
-        # pos_emb = pos_emb * depth_dist
+        
         point3dPE = point3dPE.permute(0,2,3,1) # BN x H x W x C
         point3dPE = point3dPE.reshape(B, -1, 256)
+        # pos_emb = pos_emb * depth_dist
 
         point2dFE = sin_positional_encoding3D((B, N, Hf, Wf), device=intrins.device)
         point2dFE = point2dFE.permute(0, 1, 4, 2, 3).contiguous().view(BN, -1, Hf, Wf)

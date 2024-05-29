@@ -29,17 +29,18 @@ class HungarianMatcher(nn.Module):
 
         gt_labels = torch.cat([t["labels"] for t in tgts]) # (total, )
         gt_boxes = torch.cat([t["gt_boxes"] for t in tgts]) # (total, 7)
+        # print("Fuck gt boxes: ", gt_boxes)
 
        # Compute the classification cost.
         neg_cost_class = (1 - self.alpha) * (pred_scores ** self.gamma) * (-(1 - pred_scores + 1e-8).log())
         pos_cost_class = self.alpha * ((1 - pred_scores) ** self.gamma) * (-(pred_scores + 1e-8).log())
         cost_class = pos_cost_class[:, gt_labels] - neg_cost_class[:, gt_labels] # (B * N_query, total)
-        cost_bbox = torch.cdist(pred_bboxes, gt_boxes, p=1) # (B * N_query, total)
+        cost_bbox = torch.cdist(pred_bboxes, gt_boxes) # (B * N_query, total)
 
         # Final cost matrix
         C = self.cost_bbox * cost_bbox + self.cost_class * cost_class # (B * N_query, total)
         C = C.view(B, N_query, -1).cpu() # (B, N_query, total)
-
+        
         sizes = [t["gt_boxes"].shape[0] for t in tgts]
         indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
         
