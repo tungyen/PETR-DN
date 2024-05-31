@@ -15,6 +15,8 @@ from model import petr
 color_list = [(0, 255, 255), (255, 255, 0), (0, 200, 255), (127, 0, 255), (0, 127, 255), \
     (127, 0, 127), (127, 100, 0), (255, 0, 0), (0, 0, 255), (255, 0, 255), ]
 
+connections = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)]
+
 def decode(pred, thres=0.1):
     res = []
     for i in range(pred['pred_logits'].shape[0]):
@@ -62,6 +64,19 @@ def xyzwhl2Corners(boxes):
         res.append(world_corners)
     return np.array(res)
 
+def seperateData(data, device):
+    # Inputs:
+    #     data - Dict including the input data from the dataset with different tensors
+    #     device - cuda() or cpu()
+    # Outputs:
+    #     inputData - The required data fro model
+    imgs = data['image'].to(device)
+    intrins = data['intrins'].to(device)
+    rectRots = data['rectRots'].to(device)
+    
+    inputData = {"image":imgs, "intrins":intrins, "rectRots":rectRots}
+    return inputData
+
 def test_petr():
     # Prepare for the dataset
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -75,7 +90,7 @@ def test_petr():
     testDataset = KittiDataset(1280, 640, root=kitti_path, transform=transform, mode="test")
     batchSize = 1
     nw = min([os.cpu_count(), batchSize if batchSize > 1 else 0, 8])
-    trainDataloader = DataLoader(testDataset, batch_size=batchSize, shuffle=True,
+    testDataloader = DataLoader(testDataset, batch_size=batchSize, shuffle=False,
                                  pin_memory=True, num_workers=nw)
 
     
@@ -86,16 +101,46 @@ def test_petr():
     grid['zbound'] = [-10, 10]
     
     model = petr(grid=grid, camNum=2, camC=2048, D=64, clsNum=num_cls, decoderLayerNum=6).to(device)
-
+    weightPath = "weight/petr.pth"
+    model.load_state_dict(torch.load(weightPath, map_location=device))
+    
     # test
-    for data in trainDataloader:
+    for data in testDataloader:
+        data_cuda = seperateData(data, device)
         filename = data['filename']
-        pred = model(data)
-        res = decode(pred)
+
+        pred, cls_score_aux, bboxes_aux = model(data_cuda)
+        res = decode(pred, thres=0.2)
         
-        boxCoord = xyzwhl2Corners(res) # list[(M, 8)]
-        rectRot = data['rectRots'] # (B, 3, 3)
-        K = data['intrins'][:, 0, :, :] # Use left-camera
+        # for each image in a batch
+        for i in range(len(res)):
+            boxCoord = xyzwhl2Corners(res[i]) # (M, 8, 3)
+            M, _, _ = boxCoord.shape
+
+            rectRot = data['rectRots'][i, :, :] # (3, 3)
+            K = data['intrins'][i, 0, :, :] # Use left-camera
+            K_homo = np.zeros((1, 4))
+            K_homo[0, 3] = 1
+            K = np.concatenate((K, K_homo), axis=0)
+            imgName = filename[i]
+            
+            boxCoord = boxCoord.dot(rectRot.T)
+            boxCoord = np.concatenate((boxCoord, np.ones((M, 8, 1))), axis=2)
+            boxCoord = boxCoord.dot(K.T)[:, :, :-1]
+            boxCoord = boxCoord / boxCoord[:, :, -1][..., None]
+            boxCoord = boxCoord[:, :, :-1].astype(np.uint8)
+            
+            imgPath = "Kitti/image_left/testing/image_2/" + imgName + ".png"
+            img = cv2.imread(imgPath)
+            
+            for i in range(boxCoord.shape[0]):
+                for j in range(8):
+                    cv2.circle(img, tuple(boxCoord[i, j, :]), 5, (0, 255, 0), -1)
+                
+                for start, end in connections:
+                    cv2.line(img, tuple(boxCoord[i, start, :]), tuple(boxCoord[i, end, :]), (0, 255, 0), 2)
+            cv2.imwrite('test.png', img)
+        break
         
         
     
