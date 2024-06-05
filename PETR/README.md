@@ -1,4 +1,4 @@
-# _PETR package and install_ #
+# ** _PETR package and install_ ** #
 
 ## _install basic package_ ##
 ```bash
@@ -66,5 +66,15 @@ tools/dist_train.sh projects/configs/petr/petr_vovnet_gridmask_p4_800x320.py 1 -
 ## _VovNet 800*320 for DN-PETR_ ##
 ```bash
 tools/dist_train.sh projects/configs/denoise/petr_vovnet_gridmask_p4_800x320_dn.py 1 --work-dir output/epoch24/petr_vovnet_gridmask_p4_800x320_dn/
+```
+
+## _VovNet 1600*640 for PETR_ ##
+```bash
+tools/dist_train.sh projects/configs/petr/petr_vovnet_gridmask_p4_1600x640_train_cbgs.py 1 --work-dir output/epoch24/petr_vovnet_gridmask_p4_1600x640_train_cbgs/
+```
+
+## _VovNet 1600*640 for DN-PETR_ ##
+```bash
+tools/dist_train.sh projects/configs/denoise/petr_vovnet_gridmask_p4_1600x640_train_cbgs_dn.py 1 --work-dir output/epoch24/petr_vovnet_gridmask_p4_1600x640_train_cbgs_dn/
 ```
 
