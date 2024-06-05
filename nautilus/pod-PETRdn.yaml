@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: tungyen-285
+  name: tungyen-2852
   namespace: ucsd-haosulab
   annotations:
     yunikorn.apache.org/allow-preemption: "true"
@@ -22,12 +22,12 @@ spec:
           cpu: "4"
           memory: "32Gi"
           ephemeral-storage: "30Gi"
-          nvidia.com/gpu: "1"
+          nvidia.com/gpu: "2"
         limits:
           cpu: "4"
           memory: "32Gi"
           ephemeral-storage: "30Gi"
-          nvidia.com/gpu: "1"
+          nvidia.com/gpu: "2"
       volumeMounts:
         - name: dshm
           mountPath: /dev/shm
