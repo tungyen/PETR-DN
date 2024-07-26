@@ -1,6 +1,7 @@
 venv
 OpenPCDet
 .vscode
+Kitti
 *.gz
 *.json
 *.csv
@@ -9,5 +10,4 @@ OpenPCDet
 *.mp4
 __pycache__
 *.pth
-*png
 *.zip

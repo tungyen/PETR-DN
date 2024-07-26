@@ -1,4 +1,17 @@
+# _Introduction_ #
+In this repository, the project folder is PETR, the other files are implementation of PETR for Kitti Dataset, which lead to bad result. The update for double camera case will be done in the future I hope. 
+
+Before running the project, remember to download NuScenes Dataset following the official git repository of PETR first. The report of this project is at DN_PETR.pdf
+
+![image](https://github.com/tungyen/DN_PETR/blob/tungyen/stat.png)
+![image](https://github.com/tungyen/DN_PETR/blob/tungyen/pic.png)
+
 # _PETR package and install_ #
+
+## _To run the project, cd into PETR folder first_ ##
+```bash
+cd PETR
+```
 
 ## _install basic package_ ##
 ```bash
