@@ -3,6 +3,10 @@ In this repository, the project folder is PETR, the other files are implementati
 
 Before running the project, remember to download NuScenes Dataset following the official git repository of PETR first. The report of this project is at DN_PETR.pdf
 
+# _Author_ #
+Tung Yen Chiang
+Tung Hsiao
+
 ![image](https://github.com/tungyen/PETR-DN/blob/tungyen/stat.png)
 ![image](https://github.com/tungyen/PETR-DN/blob/tungyen/pic.png)
 
