@@ -1,0 +1,70 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tungyen-nuscenes
+  namespace: ucsd-haosulab
+spec:
+  ttlSecondsAfterFinished: 86400 # Wait one day to delete completed jobs
+  template:
+    spec:
+      tolerations:
+      - key: "nautilus.io/nrp-testing"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      containers:
+        - name: gpu-container
+          image: pytorch/pytorch:1.9.0-cuda11.1-cudnn8-devel
+          # imagePullPolicy: Always
+          command:
+            - "sh"
+            - "-c"
+          args:
+            - "cd /yen-fast-vol-285v2/mmdetection3d/ && \
+              apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/3bf863cc.pub && \
+              apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1804/x86_64/7fa2af80.pub && \
+              apt-get update && apt-get install -y git && \
+              apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install gconf-service libasound2 libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 libfontconfig1 libgcc1 libgconf-2-4 libgdk-pixbuf2.0-0 libglib2.0-0 libgtk-3-0 libnspr4 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 ca-certificates fonts-liberation libappindicator1 libnss3 lsb-release xdg-utils wget -y &&\
+              pip install ninja wheel lyft_dataset_sdk networkx==2.2 numba==0.48.0 nuscenes-devkit plyfile scikit-image tensorboard trimesh==2.35.39 numpy==1.19.5 open3d einops yapf==0.40.0 && \
+              pip install --upgrade pip && pip install -U openmim && mim install mmcv-full==1.4.0 && pip install mmdet==2.24.1 && \
+              pip install mmsegmentation==0.20.2 && \
+              git checkout v0.17.1 && pip install -r requirements/build.txt && python3 setup.py develop &&\
+              PYTHONPATH=${PWD}:$PYTHONPATH python tools/create_data.py nuscenes --root-path ./data/nuscenes --out-dir ./data/nuscenes --extra-tag nuscenes"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "32Gi"
+              ephemeral-storage: "30Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "32Gi"
+              ephemeral-storage: "30Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+            - name: yen-fast-vol-285v2
+              mountPath: /yen-fast-vol-285v2
+      volumes:
+        - name: dshm # shared memory, required for the multi-worker dataloader
+          emptyDir:
+            medium: Memory
+        - name: yen-fast-vol-285v2
+          persistentVolumeClaim:
+            claimName: yen-fast-vol-285v2
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # - key: nautilus.io/group
+                  #   operator: In
+                  #   values:
+                  #     - haosu
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values:
+                      - NVIDIA-GeForce-RTX-3090
+  backoffLimit: 0 # The number of attempts to restart after crash
